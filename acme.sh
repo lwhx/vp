@@ -280,7 +280,7 @@ domain=$1  # 从参数获取域名
             fi
             red "很抱歉，证书申请失败"
             green "建议如下: "
-            yellow "1. 自行检测防火是否打开, 如使用80端口申请模式时, 请关闭防火墙或放行80端口"
+            yellow "1. 自行检测防火墙否打开, 如使用80端口申请模式时, 请关闭防火墙或放行80端口"
             yellow "2. 同一域名多次申请可能会触发Let's Encrypt官方风控, 请尝试使用脚本菜单的9选项更换证书颁发机构, 再重试申请证书, 或更换域名、或等待7天后再尝试执行脚本"
             yellow "3. 脚本可能跟不上时代, 建议截图发布到GitHub Issues询问"
             back2menu
@@ -315,7 +315,7 @@ revoke_cert() {
 renew_cert() {
     [[ -z $(~/.acme.sh/acme.sh -v 2>/dev/null) ]] && yellow "未安装acme.sh, 无法执行操作!" && exit 1
     bash ~/.acme.sh/acme.sh --list
-    read -rp "请输入要续期的域名证书 (复制Main_Domain下���示的域名): " domain
+    read -rp "请输入要续期的域名证书 (复制Main_Domain下显示的域名): " domain
     [[ -z $domain ]] && red "未输入域名, 无法执行操作!" && exit 1
     if [[ -n $(bash ~/.acme.sh/acme.sh --list | grep $domain) ]]; then
         bash ~/.acme.sh/acme.sh --renew -d ${domain} --force --ecc
@@ -444,78 +444,108 @@ EOF
 }
 
 manage_nginx_config() {
-    # 检查sites-available目录是否存在
-    if [[ ! -d /etc/nginx/sites-available ]]; then
-        red "未找到 /etc/nginx/sites-available 目录！"
-        back2menu
-    fi
+    while true; do
+        clear
+        echo -e "${GREEN}Nginx配置文件管理${PLAIN}"
+        echo "------------------------"
+        
+        # 检查sites-available目录是否存在
+        if [[ ! -d /etc/nginx/sites-available ]]; then
+            red "未找到 /etc/nginx/sites-available 目录！"
+            back2menu
+        fi
 
-    # 获取配置文件列表
-    configs=($(ls /etc/nginx/sites-available/))
-    if [[ ${#configs[@]} -eq 0 ]]; then
-        yellow "没有找到任何nginx配置文件！"
-        back2menu
-    fi
+        # 获取配置文件列表
+        configs=($(ls /etc/nginx/sites-available/))
+        if [[ ${#configs[@]} -eq 0 ]]; then
+            yellow "没有找到任何nginx配置文件！"
+            back2menu
+        fi
 
-    echo "现有的nginx配置文件："
-    for i in "${!configs[@]}"; do
-        echo -e " ${GREEN}$((i+1)).${PLAIN} ${configs[$i]}"
-    done
-    
-    read -rp "请选择要操作的配置文件 [1-${#configs[@]}]: " config_num
-    if [[ ! $config_num =~ ^[0-9]+$ ]] || [ $config_num -lt 1 ] || [ $config_num -gt ${#configs[@]} ]; then
-        red "输入错误！"
-        back2menu
-    fi
-
-    selected_config=${configs[$((config_num-1))]}
-    echo -e "已选择: ${GREEN}${selected_config}${PLAIN}"
-    echo -e "请选择操作："
-    echo -e " ${GREEN}1.${PLAIN} 修改配置"
-    echo -e " ${GREEN}2.${PLAIN} 删除配置"
-    
-    read -rp "请选择 [1-2]: " operation
-    case "$operation" in
-        1)
-            # 修改配置
-            if command -v vim &> /dev/null; then
-                vim "/etc/nginx/sites-available/${selected_config}"
-            else
-                ${PACKAGE_INSTALL[int]} vim
-                vim "/etc/nginx/sites-available/${selected_config}"
-            fi
-            
-            # 删除旧的符号链接并创建新的
-            rm -f "/etc/nginx/sites-enabled/${selected_config}"
-            ln -sf "/etc/nginx/sites-available/${selected_config}" "/etc/nginx/sites-enabled/"
-            
-            # 测试nginx配置
-            if nginx -t; then
-                systemctl reload nginx
-                green "配置已更新并重新加载！"
-            else
-                red "Nginx配置测试失败，请检查配置文件！"
-            fi
-            ;;
-        2)
-            # 删除配置
-            read -rp "确认要删除此配置吗？[y/N]: " confirm
-            if [[ $confirm =~ ^[Yy]$ ]]; then
-                rm -f "/etc/nginx/sites-available/${selected_config}"
-                rm -f "/etc/nginx/sites-enabled/${selected_config}"
-                green "配置文件已删除！"
-                # 重新加载nginx
-                systemctl reload nginx
-            else
-                yellow "已取消删除操作"
-            fi
-            ;;
-        *)
+        echo "现有的nginx配置文件："
+        for i in "${!configs[@]}"; do
+            echo -e " ${GREEN}$((i+1)).${PLAIN} ${configs[$i]}"
+        done
+        echo "------------------------"
+        echo -e " ${GREEN}0.${PLAIN} 返回主菜单"
+        
+        read -rp "请选择要操作的配置文件 [0-${#configs[@]}]: " config_num
+        
+        if [[ "$config_num" == "0" ]]; then
+            menu
+            break
+        fi
+        
+        if [[ ! $config_num =~ ^[0-9]+$ ]] || [ $config_num -lt 1 ] || [ $config_num -gt ${#configs[@]} ]; then
             red "输入错误！"
-            ;;
-    esac
-    
-    back2menu
+            continue
+        fi
+
+        selected_config=${configs[$((config_num-1))]}
+        while true; do
+            clear
+            echo -e "已选择: ${GREEN}${selected_config}${PLAIN}"
+            echo "------------------------"
+            echo -e "请选择操作："
+            echo -e " ${GREEN}1.${PLAIN} 修改配置"
+            echo -e " ${GREEN}2.${PLAIN} 删除配置"
+            echo -e " ${GREEN}3.${PLAIN} 返回配置文件列表"
+            echo -e " ${GREEN}0.${PLAIN} 返回主菜单"
+            
+            read -rp "请选择 [0-3]: " operation
+            case "$operation" in
+                0)
+                    menu
+                    break 2
+                    ;;
+                1)
+                    # 修改配置
+                    if command -v vim &> /dev/null; then
+                        vim "/etc/nginx/sites-available/${selected_config}"
+                    else
+                        ${PACKAGE_INSTALL[int]} vim
+                        vim "/etc/nginx/sites-available/${selected_config}"
+                    fi
+                    
+                    # 删除旧的符号链接并创建新的
+                    rm -f "/etc/nginx/sites-enabled/${selected_config}"
+                    ln -sf "/etc/nginx/sites-available/${selected_config}" "/etc/nginx/sites-enabled/"
+                    
+                    # 测试nginx配置
+                    if nginx -t; then
+                        systemctl reload nginx
+                        green "配置已更新并重新加载！"
+                    else
+                        red "Nginx配置测试失败，请检查配置文件！"
+                    fi
+                    read -rp "按回车键继续..."
+                    ;;
+                2)
+                    # 删除配置
+                    read -rp "确认要删除此配置吗？[y/N]: " confirm
+                    if [[ $confirm =~ ^[Yy]$ ]]; then
+                        rm -f "/etc/nginx/sites-available/${selected_config}"
+                        rm -f "/etc/nginx/sites-enabled/${selected_config}"
+                        green "配置文件已删除！"
+                        # 重新加载nginx
+                        systemctl reload nginx
+                        read -rp "按回车键继续..."
+                        break  # 返回配置文件列表
+                    else
+                        yellow "已取消删除操作"
+                        read -rp "按回车键继续..."
+                    fi
+                    ;;
+                3)
+                    break  # 返回配置文件列表
+                    ;;
+                *)
+                    red "输入错误！"
+                    read -rp "按回车键继续..."
+                    ;;
+            esac
+        done
+    done
 }
 
 menu() {
