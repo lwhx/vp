@@ -8,6 +8,6 @@
 
 ### 一键脚本
 ```bash
-bash <(curl -sL kejilion.sh)
+wget -O acme.sh https://raw.githubusercontent.com/lwhx/vp/lwhx/acme.sh && chmod +x acme.sh && clear && ./acme.sh
 ```
 ***
