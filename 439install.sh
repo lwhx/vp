@@ -101,5 +101,3 @@ echo "qBittorrent 已成功安装和配置。"
 echo "请访问 http://<你的公网IP>:8080 进行登录。"
 echo "默认用户名: admin"
 echo "默认密码: adminadmin"
-close
-floater
