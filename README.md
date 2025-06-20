@@ -11,3 +11,9 @@
 wget -O acme.sh https://raw.githubusercontent.com/lwhx/vp/lwhx/acme.sh && chmod +x acme.sh && ./acme.sh
 ```
 ***
+
+### qbittorrent v4.6.7
+```bash
+wget -O acme.sh https://raw.githubusercontent.com/lwhx/vp/lwhx/467install.sh && chmod +x 467install.sh && ./467install.sh
+```
+***
