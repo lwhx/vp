@@ -4,7 +4,7 @@ apt install mediainfo -y
 set -e
 
 # 定义变量
-DOWNLOAD_URL="https://f005.backblazeb2.com/file/txjbwwdh/qb/4.6.7/x86_64-qbittorrent-nox"
+DOWNLOAD_URL="https://github.com/userdocs/qbittorrent-nox-static/releases/download/release-4.6.7_v2.0.10/x86_64-qbittorrent-nox"
 INSTALL_PATH="/root/x86_64-qbittorrent-nox"
 SERVICE_FILE="/etc/systemd/system/qbittorrent.service"
 
