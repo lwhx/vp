@@ -596,12 +596,15 @@ create_nginx_config() {
     http3_enabled=false
     http2_enabled=false
     
-    if nginx -V 2>&1 | grep -q "with-http_v3_module"; then
+    # 获取 Nginx 编译信息（大写 V 输出到 stderr）
+    nginx_compile_info=$(nginx -V 2>&1)
+    
+    if echo "$nginx_compile_info" | grep -q "with-http_v3_module"; then
         http3_enabled=true
         green "检测到 Nginx 支持 HTTP/3"
     fi
     
-    if nginx -V 2>&1 | grep -q "with-http_v2_module"; then
+    if echo "$nginx_compile_info" | grep -q "with-http_v2_module"; then
         http2_enabled=true
         green "检测到 Nginx 支持 HTTP/2"
     fi
