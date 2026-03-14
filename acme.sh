@@ -184,12 +184,17 @@ install_nginx(){
         # 提取主版本号
         major_version=$(echo "$current_version" | cut -d. -f1)
         
-        # 检查是否需要升级（需要 1.25+ 支持 HTTP/3）
-        if [[ $major_version -ge 1 && $(echo "$current_version" | cut -d. -f2) -ge 25 ]]; then
+        # 检查 Nginx 是否支持 HTTP/2 或 HTTP/3
+        nginx_features=$(nginx -V 2>&1)
+        
+        if echo "$nginx_features" | grep -q "with-http_v3_module"; then
             green "Nginx 版本已支持 HTTP/3，无需升级"
             return 0
+        elif echo "$nginx_features" | grep -q "with-http_v2_module"; then
+            green "Nginx 版本已支持 HTTP/2，无需升级"
+            return 0
         else
-            yellow "当前 Nginx 版本低于 1.25，将升级到支持 HTTP/3 的版本"
+            yellow "当前 Nginx 版本不支持 HTTP/2 和 HTTP/3，将升级"
         fi
     else
         yellow "Nginx 未安装，将安装最新版本"
@@ -693,12 +698,16 @@ create_nginx_config() {
         major=$(echo "$current_version" | cut -d. -f1)
         minor=$(echo "$current_version" | cut -d. -f2)
         
-        # 检查是否需要升级（需要 1.25+ 支持 HTTP/3）
-        if [[ $major -ge 1 && $minor -ge 25 ]]; then
+        # 检查 Nginx 是否支持 HTTP/2 或 HTTP/3
+        nginx_features=$(nginx -V 2>&1)
+        
+        if echo "$nginx_features" | grep -q "with-http_v3_module"; then
             green "Nginx 版本 $current_version 已支持 HTTP/3"
+        elif echo "$nginx_features" | grep -q "with-http_v2_module"; then
+            green "Nginx 版本 $current_version 已支持 HTTP/2"
         else
-            yellow "Nginx 版本 $current_version 不支持 HTTP/3"
-            read -rp "是否升级到支持 HTTP/3 的版本？[Y/N]: " upgrade_yn
+            yellow "Nginx 版本 $current_version 不支持 HTTP/2 和 HTTP/3"
+            read -rp "是否升级？[Y/N]: " upgrade_yn
             if [[ $upgrade_yn =~ ^[Yy]$ ]]; then
                 install_nginx
             fi
