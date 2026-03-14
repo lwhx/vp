@@ -173,6 +173,100 @@ back2menu() {
     esac
 }
 
+# Nginx 安装/升级函数
+install_nginx(){
+    # 检查 Nginx 是否已安装
+    if command -v nginx &> /dev/null; then
+        # 获取当前版本
+        current_version=$(nginx -v 2>&1 | grep -oP '\d+\.\d+\.\d+')
+        green "当前 Nginx 版本: $current_version"
+        
+        # 提取主版本号
+        major_version=$(echo "$current_version" | cut -d. -f1)
+        
+        # 检查是否需要升级（需要 1.25+ 支持 HTTP/3）
+        if [[ $major_version -ge 1 && $(echo "$current_version" | cut -d. -f2) -ge 25 ]]; then
+            green "Nginx 版本已支持 HTTP/3，无需升级"
+            return 0
+        else
+            yellow "当前 Nginx 版本低于 1.25，将升级到支持 HTTP/3 的版本"
+        fi
+    else
+        yellow "Nginx 未安装，将安装最新版本"
+    fi
+    
+    # 根据系统选择安装方式
+    if [[ $SYSTEM == "CentOS" ]]; then
+        # CentOS 系统
+        yum install -y yum-utils
+        
+        # 添加 Nginx 官方源
+        cat > /etc/yum.repos.d/nginx.repo << 'EOF'
+[nginx-stable]
+name=Nginx Stable Repo
+baseurl=http://nginx.org/packages/centos/$releasever/$basearch/
+gpgcheck=1
+enabled=1
+gpgkey=https://nginx.org/keys/nginx_signing.key
+
+[nginx-mainline]
+name=Nginx Mainline Repo
+baseurl=http://nginx.org/packages/mainline/centos/$releasever/$basearch/
+gpgcheck=1
+enabled=0
+gpgkey=https://nginx.org/keys/nginx_signing.key
+EOF
+        
+        # 启用主线版本
+        yum-config-manager --enable nginx-mainline
+        
+        # 安装/升级
+        yum install -y nginx
+        
+    elif [[ $SYSTEM == "Debian" ]] || [[ $SYSTEM == "Ubuntu" ]]; then
+        # Debian/Ubuntu 系统
+        
+        # 备份现有配置
+        if [[ -f /etc/nginx/nginx.conf ]]; then
+            cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.backup
+        fi
+        
+        # 添加 Nginx 官方源
+        echo "deb http://nginx.org/packages/mainline/debian/ $(cat /etc/debian_version) nginx" | tee /etc/apt/sources.list.d/nginx.list
+        
+        # 添加签名密钥
+        curl -fsSL https://nginx.org/keys/nginx_signing.key | gpg --dearmor -o /usr/share/keyrings/nginx-archive-keyring.gpg 2>/dev/null
+        
+        # 更新并安装
+        apt-get update
+        apt-get install -y nginx
+        
+    else
+        red "不支持的系统，无法自动安装 Nginx"
+        exit 1
+    fi
+    
+    # 验证安装
+    if command -v nginx &> /dev/null; then
+        new_version=$(nginx -v 2>&1 | grep -oP '\d+\.\d+\.\d+')
+        green "Nginx 安装成功！版本: $new_version"
+        
+        # 检查 HTTP/3 支持
+        if nginx -V 2>&1 | grep -q "with-http_v3_module"; then
+            green "✓ Nginx 已支持 HTTP/3"
+        else
+            yellow "⚠ Nginx 不支持 HTTP/3，将降级使用 HTTP/2"
+        fi
+        
+        # 启动 Nginx
+        systemctl start nginx
+        systemctl enable nginx
+    else
+        red "Nginx 安装失败"
+        exit 1
+    fi
+}
+
 install_base(){
     if [[ ! $SYSTEM == "CentOS" ]]; then
         ${PACKAGE_UPDATE[int]}
@@ -553,17 +647,29 @@ uninstall() {
 }
 
 create_nginx_config() {
-    # 检查是否安装了nginx
+    # 自动检测并安装/升级 Nginx
+    yellow "正在检测 Nginx 版本..."
+    
+    # 检测 Nginx 是否已安装
     if ! command -v nginx &> /dev/null; then
-        yellow "检测到未安装nginx，正在安装..."
-        if [[ $SYSTEM == "CentOS" ]]; then
-            ${PACKAGE_INSTALL[int]} nginx
+        yellow "Nginx 未安装，将自动安装..."
+        install_nginx
+    else
+        # 获取当前版本
+        current_version=$(nginx -v 2>&1 | grep -oP '\d+\.\d+\.\d+')
+        major=$(echo "$current_version" | cut -d. -f1)
+        minor=$(echo "$current_version" | cut -d. -f2)
+        
+        # 检查是否需要升级（需要 1.25+ 支持 HTTP/3）
+        if [[ $major -ge 1 && $minor -ge 25 ]]; then
+            green "Nginx 版本 $current_version 已支持 HTTP/3"
         else
-            ${PACKAGE_UPDATE[int]}
-            ${PACKAGE_INSTALL[int]} nginx
+            yellow "Nginx 版本 $current_version 不支持 HTTP/3"
+            read -rp "是否升级到支持 HTTP/3 的版本？[Y/N]: " upgrade_yn
+            if [[ $upgrade_yn =~ ^[Yy]$ ]]; then
+                install_nginx
+            fi
         fi
-        systemctl start nginx
-        systemctl enable nginx
     fi
 
     # 创建必要的目录
@@ -1038,13 +1144,15 @@ menu() {
     echo -e " ${GREEN}7.${PLAIN} 撤销并删除已申请的证书"
     echo -e " ${GREEN}8.${PLAIN} 手动续期已申请的证书"
     echo -e " ${GREEN}9.${PLAIN} 切换证书颁发机构"
-    echo -e " ${GREEN}10.${PLAIN} 创建Nginx反向代理配置"
-    echo -e " ${GREEN}11.${PLAIN} 管理Nginx配置文件"
     echo " -------------"
-    echo -e " ${GREEN}12.${PLAIN} ${YELLOW}更新脚本到最新版本${PLAIN}"
+    echo -e " ${GREEN}10.${PLAIN} 安装/升级 Nginx (支持HTTP/3)"
+    echo -e " ${GREEN}11.${PLAIN} 创建Nginx反向代理配置"
+    echo -e " ${GREEN}12.${PLAIN} 管理Nginx配置文件"
+    echo " -------------"
+    echo -e " ${GREEN}13.${PLAIN} ${YELLOW}更新脚本到最新版本${PLAIN}"
     echo -e " ${GREEN}0.${PLAIN} 退出脚本"
     echo ""
-    read -rp "请输入选项 [0-12]: " NumberInput
+    read -rp "请输入选项 [0-13]: " NumberInput
     case "$NumberInput" in
         1) install_acme ;;
         2) uninstall ;;
@@ -1055,9 +1163,10 @@ menu() {
         7) revoke_cert ;;
         8) renew_cert ;;
         9) switch_provider ;;
-        10) create_nginx_config ;;
-        11) manage_nginx_config ;;
-        12) update_script ;;
+        10) install_nginx ;;
+        11) create_nginx_config ;;
+        12) manage_nginx_config ;;
+        13) update_script ;;
         *) exit 1 ;;
     esac
 }
