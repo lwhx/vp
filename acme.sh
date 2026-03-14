@@ -691,9 +691,6 @@ server {
         proxy_buffers 8 16k;
         proxy_busy_buffers_size 32k;
         
-        # 代理头部超时
-        proxy_headers_timeout 60s;
-        
         # 保持连接
         proxy_socket_keepalive on;
     }
@@ -780,9 +777,6 @@ server {
         proxy_buffers 8 16k;
         proxy_busy_buffers_size 32k;
         
-        # 代理头部超时
-        proxy_headers_timeout 60s;
-        
         # 保持连接
         proxy_socket_keepalive on;
     }
@@ -865,9 +859,6 @@ server {
         proxy_buffer_size 16k;
         proxy_buffers 8 16k;
         proxy_busy_buffers_size 32k;
-        
-        # 代理头部超时
-        proxy_headers_timeout 60s;
         
         # 保持连接
         proxy_socket_keepalive on;
