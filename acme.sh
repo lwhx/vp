@@ -231,15 +231,48 @@ EOF
             cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.backup
         fi
         
-        # 添加 Nginx 官方源
-        echo "deb http://nginx.org/packages/mainline/debian/ $(cat /etc/debian_version) nginx" | tee /etc/apt/sources.list.d/nginx.list
+        # 获取 Debian 版本代号
+        debian_codename=$(cat /etc/debian_version)
+        
+        # 尝试使用 Nginx 官方源，如果失败则使用备选方案
+        # 首先尝试使用 Ubuntu 源作为备选
+        if [[ -f /etc/apt/sources.list.d/nginx.list ]]; then
+            rm -f /etc/apt/sources.list.d/nginx.list
+        fi
+        
+        # 尝试添加 Nginx 官方源
+        echo "deb http://nginx.org/packages/mainline/debian/ ${debian_codename} nginx" > /etc/apt/sources.list.d/nginx.list
         
         # 添加签名密钥
         curl -fsSL https://nginx.org/keys/nginx_signing.key | gpg --dearmor -o /usr/share/keyrings/nginx-archive-keyring.gpg 2>/dev/null
         
-        # 更新并安装
-        apt-get update
-        apt-get install -y nginx
+        # 尝试更新并安装
+        if ! apt-get update 2>/dev/null; then
+            # Nginx 官方源不可用，使用 Ubuntu 备选源
+            yellow "Nginx 官方源不可用，尝试使用备选方案..."
+            
+            # 使用 Ubuntu nginx/nghttp2 源
+            if [[ $SYSTEM == "Debian" ]]; then
+                # Debian 系统使用 Ubuntu 备选源
+                echo "deb http://nginx.org/packages/ubuntu/ ${debian_codename} nginx" > /etc/apt/sources.list.d/nginx.list
+                apt-get update 2>/dev/null || {
+                    # 最后尝试使用编译安装
+                    yellow "自动安装失败，请手动运行以下命令安装 Nginx："
+                    yellow "1. apt install -y nginx"
+                    yellow "2. 或者使用 Docker 部署 Nginx"
+                    return 1
+                }
+            fi
+        fi
+        
+        # 安装/升级 Nginx
+        apt-get install -y nginx || {
+            # 安装失败，使用系统默认源
+            yellow "Nginx 官方源安装失败，尝试使用系统默认源..."
+            rm -f /etc/apt/sources.list.d/nginx.list
+            apt-get update
+            apt-get install -y nginx
+        }
         
     else
         red "不支持的系统，无法自动安装 Nginx"
