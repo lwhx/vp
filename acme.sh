@@ -644,10 +644,7 @@ server {
     ssl_session_tickets off;
     ssl_buffer_size 32k;
     
-    # HTTP/2 和 HTTP/3 配置
-    http2 on;
-    http3 on;
-    quic_retry on;
+    # HTTP/2 和 HTTP/3 配置（已在 listen 中启用，此处可配置并发流）
     http2_max_concurrent_streams 512;
     http3_max_concurrent_streams 512;
     
@@ -737,8 +734,7 @@ server {
     ssl_session_tickets off;
     ssl_buffer_size 32k;
     
-    # HTTP/2 配置
-    http2 on;
+    # HTTP/2 配置（已在 listen 中启用，此处可配置并发流）
     http2_max_concurrent_streams 512;
     
     # 安全头部
