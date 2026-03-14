@@ -114,6 +114,55 @@ done
 
 [[ -z $SYSTEM ]] && red "不支持当前VPS系统, 请使用主流的操作系统" && exit 1
 
+# 脚本更新函数
+update_script() {
+    yellow "正在检查更新..."
+    
+    # 获取当前脚本路径
+    script_path="$(readlink -f "$0")"
+    script_dir="$(dirname "$script_path")"
+    
+    # 尝试从GitHub拉取最新版本
+    green "正在从 GitHub 拉取最新版本..."
+    
+    # 备份当前脚本
+    cp "$script_path" "${script_path}.backup.$(date +%Y%m%d%H%M%S)"
+    
+    # 尝试多种下载方式
+    if curl -sSL "https://raw.githubusercontent.com/lwhx/vp/refs/heads/lwhx/acme.sh" -o "$script_path" 2>/dev/null; then
+        green "脚本更新成功！"
+    elif curl -sSL "https://raw.githubusercontent.com/lwhx/vp/main/acme.sh" -o "$script_path" 2>/dev/null; then
+        green "脚本更新成功！"
+    elif wget -q "https://raw.githubusercontent.com/lwhx/vp/refs/heads/lwhx/acme.sh" -O "$script_path" 2>/dev/null; then
+        green "脚本更新成功！"
+    else
+        # 尝试使用git pull
+        if [[ -d "$script_dir/.git" ]]; then
+            yellow "尝试使用 git pull 更新..."
+            cd "$script_dir"
+            if git pull origin lwhx 2>/dev/null; then
+                green "脚本更新成功！"
+            else
+                red "更新失败，请检查网络连接或手动更新"
+                cd -
+            fi
+        else
+            red "更新失败，请检查网络连接或手动更新"
+        fi
+    fi
+    
+    # 设置执行权限
+    chmod +x "$script_path"
+    
+    # 显示新版本信息
+    if [[ -f "$script_path" ]]; then
+        green "脚本已更新到最新版本！"
+        yellow "如需使用新版本，请重新运行脚本"
+    fi
+    
+    back2menu
+}
+
 back2menu() {
     echo ""
     green "所选命令操作执行完成"
@@ -911,9 +960,10 @@ menu() {
     echo -e " ${GREEN}10.${PLAIN} 创建Nginx反向代理配置"
     echo -e " ${GREEN}11.${PLAIN} 管理Nginx配置文件"
     echo " -------------"
+    echo -e " ${GREEN}12.${PLAIN} ${YELLOW}更新脚本到最新版本${PLAIN}"
     echo -e " ${GREEN}0.${PLAIN} 退出脚本"
     echo ""
-    read -rp "请输入选项 [0-11]: " NumberInput
+    read -rp "请输入选项 [0-12]: " NumberInput
     case "$NumberInput" in
         1) install_acme ;;
         2) uninstall ;;
@@ -926,6 +976,7 @@ menu() {
         9) switch_provider ;;
         10) create_nginx_config ;;
         11) manage_nginx_config ;;
+        12) update_script ;;
         *) exit 1 ;;
     esac
 }
