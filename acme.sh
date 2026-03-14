@@ -5,6 +5,11 @@ GREEN="\033[32m"
 YELLOW="\033[33m"
 PLAIN='\033[0m'
 
+# 设置错误处理
+set -e
+set -o pipefail
+
+# 颜色输出函数
 red(){
     echo -e "\033[31m\033[01m$1\033[0m"
 }
@@ -15,6 +20,69 @@ green(){
 
 yellow(){
     echo -e "\033[33m\033[01m$1\033[0m"
+}
+
+# 输入验证函数 - 防止命令注入
+validate_input() {
+    local input="$1"
+    local name="$2"
+    
+    # 检查是否包含危险字符
+    if [[ "$input" =~ [\;\|\&\$\`\(\)\{\}\[\]\*\?\>\<] ]]; then
+        red "错误: ${name} 包含非法字符，已拒绝"
+        exit 1
+    fi
+    
+    # 检查是否为空
+    if [[ -z "$input" ]]; then
+        red "错误: ${name} 不能为空"
+        exit 1
+    fi
+    
+    echo "$input"
+}
+
+# 域名验证函数
+validate_domain() {
+    local domain="$1"
+    
+    # 检查是否包含非法字符
+    if [[ ! "$domain" =~ ^[a-zA-Z0-9][a-zA-Z0-9\.\-]*[a-zA-Z0-9]$ ]]; then
+        red "错误: 域名格式不正确"
+        exit 1
+    fi
+    
+    # 检查长度
+    if [[ ${#domain} -gt 253 ]]; then
+        red "错误: 域名过长"
+        exit 1
+    fi
+    
+    echo "$domain"
+}
+
+# IP地址验证函数
+validate_ip() {
+    local ip="$1"
+    
+    if [[ ! "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+        red "错误: IP地址格式不正确"
+        exit 1
+    fi
+    
+    echo "$ip"
+}
+
+# 端口验证函数
+validate_port() {
+    local port="$1"
+    
+    if [[ ! "$port" =~ ^[0-9]+$ ]] || [[ "$port" -lt 1 ]] || [[ "$port" -gt 65535 ]]; then
+        red "错误: 端口号必须在 1-65535 之间"
+        exit 1
+    fi
+    
+    echo "$port"
 }
 
 REGEX=("debian" "ubuntu" "centos|red hat|kernel|oracle linux|alma|rocky" "'amazon linux'" "fedora")
@@ -74,16 +142,46 @@ install_base(){
 
 install_acme(){
     install_base
+    
+    # 检查 curl 是否可用
+    if [[ -z $(type -P curl) ]]; then
+        red "curl 未安装，请先安装 curl 后再运行脚本"
+        ${PACKAGE_INSTALL[int]} curl
+    fi
+    
     read -rp "请输入注册邮箱 (例: admin@gmail.com, 或留空自动生成一个gmail邮箱): " acmeEmail
+    
+    # 如果用户未输入邮箱，则自动生成
     if [[ -z $acmeEmail ]]; then
         autoEmail=$(date +%s%N | md5sum | cut -c 1-16)
         acmeEmail=$autoEmail@gmail.com
         yellow "已取消设置邮箱, 使用自动生成的gmail邮箱: $acmeEmail"
     fi
-    curl https://get.acme.sh | sh -s email=$acmeEmail
+    
+    # 安装acme.sh
+    yellow "正在安装 Acme.sh..."
+    if curl -sSL https://get.acme.sh | sh -s email=$acmeEmail; then
+        green "Acme.sh 安装命令执行成功"
+    else
+        red "Acme.sh 安装命令执行失败，请检查网络连接"
+        back2menu
+    fi
+    
     source ~/.bashrc
-    bash ~/.acme.sh/acme.sh --upgrade --auto-upgrade
-    bash ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
+    
+    # 检查 acme.sh 是否安装成功
+    if [[ ! -f ~/.acme.sh/acme.sh ]]; then
+        red "Acme.sh 安装失败，未找到安装文件"
+        back2menu
+    fi
+    
+    # 升级acme.sh并启用自动升级
+    bash ~/.acme.sh/acme.sh --upgrade --auto-upgrade 2>/dev/null
+    
+    # 设置默认CA为Let's Encrypt
+    bash ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt 2>/dev/null
+    
+    # 验证安装是否成功
     if [[ -n $(~/.acme.sh/acme.sh -v 2>/dev/null) ]]; then
         green "Acme.sh证书申请脚本安装成功!"
     else
@@ -96,7 +194,7 @@ install_acme(){
 }
 
 check_80(){
-    
+    # 检查 lsof 是否已安装
     if [[ -z $(type -P lsof) ]]; then
         if [[ ! $SYSTEM == "CentOS" ]]; then
             ${PACKAGE_UPDATE[int]}
@@ -107,50 +205,59 @@ check_80(){
     yellow "正在检测80端口是否占用..."
     sleep 1
     
-    if [[  $(lsof -i:"80" | grep -i -c "listen") -eq 0 ]]; then
+    # 检测 80 端口是否被占用
+    if [[ $(lsof -i:"80" 2>/dev/null | grep -i -c "listen") -eq 0 ]]; then
         green "检测到目前80端口未被占用"
         sleep 1
     else
-        red "检测到目前80端口被其他程序被占用，以下为占用程序信息"
+        red "检测到目前80端口被其他程序占用，以下为占用程序信息"
         lsof -i:"80"
         read -rp "如需结束占用进程请按Y，按其他键则退出 [Y/N]: " yn
-        if [[ $yn =~ "Y"|"y" ]]; then
-            lsof -i:"80" | awk '{print $2}' | grep -v "PID" | xargs kill -9
+        if [[ $yn =~ ^[Yy]$ ]]; then
+            lsof -i:"80" | awk '{print $2}' | grep -v "PID" | xargs kill -9 2>/dev/null
             sleep 1
         else
             exit 1
         fi
     fi
-	   
-	if [[ $SYSTEM == "CentOS" ]]; then
-     	firewall-cmd --permanent --add-port=80/tcp
-        firewall-cmd --reload
-		echo "TCP/80端口已开启"
-	else 
-	   [[ ! $SYSTEM == "CentOS" ]]
-        ufw allow 80/tcp
-		ufw reload
-		echo "TCP/80端口已开启"  
+    
+    # 配置防火墙规则
+    if [[ $SYSTEM == "CentOS" ]]; then
+        firewall-cmd --permanent --add-port=80/tcp 2>/dev/null
+        firewall-cmd --reload 2>/dev/null
+        green "TCP/80端口已开启"
+    else
+        if command -v ufw &> /dev/null; then
+            ufw allow 80/tcp 2>/dev/null
+            ufw reload 2>/dev/null
+            green "TCP/80端口已开启"
+        fi
     fi
-	
 }
 
 acme_standalone(){
     [[ -z $(~/.acme.sh/acme.sh -v 2>/dev/null) ]] && red "未安装acme.sh, 无法执行操作" && exit 1
+    
+    # 检测80端口
     check_80
-    WARPv4Status=$(curl -s4m8 https://www.cloudflare.com/cdn-cgi/trace -k | grep warp | cut -d= -f2)
-    WARPv6Status=$(curl -s6m8 https://www.cloudflare.com/cdn-cgi/trace -k | grep warp | cut -d= -f2)
+    
+    # 检测WARP状态并临时关闭
+    WARPv4Status=$(curl -s4m8 https://www.cloudflare.com/cdn-cgi/trace -k 2>/dev/null | grep warp | cut -d= -f2)
+    WARPv6Status=$(curl -s6m8 https://www.cloudflare.com/cdn-cgi/trace -k 2>/dev/null | grep warp | cut -d= -f2)
     if [[ $WARPv4Status =~ on|plus ]] || [[ $WARPv6Status =~ on|plus ]]; then
         wg-quick down wgcf >/dev/null 2>&1
         systemctl stop warp-go >/dev/null 2>&1
     fi
     
-    ipv4=$(curl -s4m8 ip.p3terx.com -k | sed -n 1p)
-    ipv6=$(curl -s6m8 ip.p3terx.com -k | sed -n 1p)
+    # 获取并缓存IP地址
+    ipv4=$(curl -s4m8 ip.p3terx.com -k 2>/dev/null | sed -n 1p)
+    ipv6=$(curl -s6m8 ip.p3terx.com -k 2>/dev/null | sed -n 1p)
     
     echo ""
     yellow "在使用80端口申请模式时, 请先将您的域名解析至你的VPS的真实IP地址, 否则会导致证书申请失败"
     echo ""
+    
+    # 显示IP地址
     if [[ -n $ipv4 && -n $ipv6 ]]; then
         echo -e "VPS的真实IPv4地址为: ${GREEN} $ipv4 ${PLAIN}"
         echo -e "VPS的真实IPv6地址为: ${GREEN} $ipv6 ${PLAIN}"
@@ -159,20 +266,24 @@ acme_standalone(){
     elif [[ -z $ipv4 && -n $ipv6 ]]; then
         echo -e "VPS的真实IPv6地址为: ${GREEN} $ipv6 ${PLAIN}"
     fi
+    
     echo ""
     read -rp "请输入解析完成的域名: " domain
-    [[ -z $domain ]] && red "未输入域名，无法执行操作！" && exit 1
+    domain=$(validate_domain "${domain}")
+    
     green "已输入的域名：$domain" && sleep 1
-    domainIP=$(dig +short ${domain})
     
-    if [[ $domainIP == $ipv6 ]]; then
-        bash ~/.acme.sh/acme.sh --issue -d ${domain} --standalone -k ec-256 --listen-v6 --insecure
-    fi
-    if [[ $domainIP == $ipv4 ]]; then
-        bash ~/.acme.sh/acme.sh --issue -d ${domain} --standalone -k ec-256 --insecure
+    # 获取域名解析的IP
+    domainIP=$(dig +short "${domain}" 2>/dev/null)
+    
+    # 验证域名解析结果
+    if [[ -z "$domainIP" ]]; then
+        red "域名解析失败，请检查域名是否正确填写或等待DNS解析完成"
+        exit 1
     fi
     
-    if [[ -n $(echo $domainIP | grep nginx) ]]; then
+    # 检查是否解析到nginx（域名解析错误）
+    if [[ -n $(echo "$domainIP" | grep nginx) ]]; then
         if [[ -n $(type -P wg-quick) && -n $(type -P wgcf) ]]; then
             wg-quick up wgcf >/dev/null 2>&1
         fi
@@ -181,8 +292,11 @@ acme_standalone(){
         fi
         yellow "域名解析失败, 请检查域名是否正确填写或等待解析完成再执行脚本"
         exit 1
-    elif [[ -n $(echo $domainIP | grep ":") || -n $(echo $domainIP | grep ".") ]]; then
-        if [[ $domainIP != $ipv4 ]] && [[ $domainIP != $ipv6 ]]; then
+    fi
+    
+    # 检查IP是否匹配
+    if [[ -n $(echo "$domainIP" | grep ":") || -n $(echo "$domainIP" | grep ".") ]]; then
+        if [[ "$domainIP" != "$ipv4" ]] && [[ "$domainIP" != "$ipv6" ]]; then
             if [[ -n $(type -P wg-quick) && -n $(type -P wgcf) ]]; then
                 wg-quick up wgcf >/dev/null 2>&1
             fi
@@ -198,60 +312,96 @@ acme_standalone(){
             exit 1
         fi
     fi
-    mkdir -p /root/${domain}  # 创建一个对应域名的文件夹
+    
+    # 根据IP版本申请证书
+    if [[ "$domainIP" == "$ipv6" ]]; then
+        bash ~/.acme.sh/acme.sh --issue -d "${domain}" --standalone -k ec-256 --listen-v6 --insecure
+    fi
+    
+    if [[ "$domainIP" == "$ipv4" ]]; then
+        bash ~/.acme.sh/acme.sh --issue -d "${domain}" --standalone -k ec-256 --insecure
+    fi
+    
+    # 安装证书
+    mkdir -p /root/${domain}
     bash ~/.acme.sh/acme.sh --install-cert -d "${domain}" --key-file /root/${domain}/private.key --fullchain-file /root/${domain}/cert.crt --ecc
-    checktls ${domain}  # 传递域名到checktls函数
+    checktls "${domain}"
 }
 
 acme_cfapiTLD(){
     [[ -z $(~/.acme.sh/acme.sh -v 2>/dev/null) ]] && red "未安装Acme.sh, 无法执行操作" && exit 1
-    ipv4=$(curl -s4m8 ip.p3terx.com -k | sed -n 1p)
-    ipv6=$(curl -s6m8 ip.p3terx.com -k | sed -n 1p)
+    
+    # 获取IP地址（仅用于显示）
+    ipv4=$(curl -s4m8 ip.p3terx.com -k 2>/dev/null | sed -n 1p)
+    ipv6=$(curl -s6m8 ip.p3terx.com -k 2>/dev/null | sed -n 1p)
+    
     read -rp "请输入需要申请证书的域名: " domain
+    domain=$(validate_domain "${domain}")
+    
     if [[ $(echo ${domain:0-2}) =~ cf|ga|gq|ml|tk ]]; then
         red "检测为Freenom免费域名, 由于CloudFlare API不支持, 故无法使用本模式申请!"
         back2menu
     fi
+    
     read -rp "请输入CloudFlare Global API Key: " GAK
-    [[ -z $GAK ]] && red "未输入CloudFlare Global API Key, 无法执行操作!" && exit 1
+    GAK=$(validate_input "${GAK}" "CloudFlare Global API Key")
     export CF_Key="$GAK"
+    
     read -rp "请输入CloudFlare的登录邮箱: " CFemail
-    [[ -z $domain ]] && red "未输入CloudFlare的登录邮箱, 无法执行操作!" && exit 1
+    CFemail=$(validate_input "${CFemail}" "CloudFlare登录邮箱")
     export CF_Email="$CFemail"
+    
+    # API模式不需要检测80端口，直接申请证书
+    yellow "正在使用CloudFlare API申请证书..."
+    sleep 1
+    
     if [[ -z $ipv4 ]]; then
         bash ~/.acme.sh/acme.sh --issue --dns dns_cf -d "${domain}" -k ec-256 --listen-v6 --insecure
     else
         bash ~/.acme.sh/acme.sh --issue --dns dns_cf -d "${domain}" -k ec-256 --insecure
     fi
-    mkdir -p /root/${domain}  # 创建一个对应域名的文件夹
+    
+    mkdir -p /root/${domain}
     bash ~/.acme.sh/acme.sh --install-cert -d "${domain}" --key-file /root/${domain}/private.key --fullchain-file /root/${domain}/cert.crt --ecc
-    checktls ${domain}  # 传递域名到checktls函数
+    checktls "${domain}"
 }
 
 acme_cfapiNTLD(){
     [[ -z $(~/.acme.sh/acme.sh -v 2>/dev/null) ]] && red "未安装acme.sh, 无法执行操作" && exit 1
-    ipv4=$(curl -s4m8 ip.p3terx.com -k | sed -n 1p)
-    ipv6=$(curl -s6m8 ip.p3terx.com -k | sed -n 1p)
+    
+    # 获取IP地址（仅用于显示）
+    ipv4=$(curl -s4m8 ip.p3terx.com -k 2>/dev/null | sed -n 1p)
+    ipv6=$(curl -s6m8 ip.p3terx.com -k 2>/dev/null | sed -n 1p)
+    
     read -rp "请输入需要申请证书的泛域名 (输入格式：example.com): " domain
-    [[ -z $domain ]] && red "未输入域名，无法执行操作！" && exit 1
+    domain=$(validate_domain "${domain}")
+    
     if [[ $(echo ${domain:0-2}) =~ cf|ga|gq|ml|tk ]]; then
         red "检测为Freenom免费域名, 由于CloudFlare API不支持, 故无法使用本模式申请!"
         back2menu
     fi
+    
     read -rp "请输入CloudFlare Global API Key: " GAK
-    [[ -z $GAK ]] && red "未输入CloudFlare Global API Key, 无法执行操作！" && exit 1
+    GAK=$(validate_input "${GAK}" "CloudFlare Global API Key")
     export CF_Key="$GAK"
+    
     read -rp "请输入CloudFlare的登录邮箱: " CFemail
-    [[ -z $domain ]] && red "未输入CloudFlare的登录邮箱, 无法执行操作!" && exit 1
+    CFemail=$(validate_input "${CFemail}" "CloudFlare登录邮箱")
     export CF_Email="$CFemail"
+    
+    # API模式不需要检测80端口，直接申请证书
+    yellow "正在使用CloudFlare API申请泛域名证书..."
+    sleep 1
+    
     if [[ -z $ipv4 ]]; then
         bash ~/.acme.sh/acme.sh --issue --dns dns_cf -d "*.${domain}" -d "${domain}" -k ec-256 --listen-v6 --insecure
     else
         bash ~/.acme.sh/acme.sh --issue --dns dns_cf -d "*.${domain}" -d "${domain}" -k ec-256 --insecure
     fi
-    mkdir -p /root/${domain}  # 创建一个对应域名的文件夹
+    
+    mkdir -p /root/${domain}
     bash ~/.acme.sh/acme.sh --install-cert -d "*.${domain}" --key-file /root/${domain}/private.key --fullchain-file /root/${domain}/cert.crt --ecc
-    checktls ${domain}  # 传递域名到checktls函数
+    checktls "${domain}"
 }
 
 checktls() {
@@ -298,12 +448,13 @@ revoke_cert() {
     [[ -z $(~/.acme.sh/acme.sh -v 2>/dev/null) ]] && yellow "未安装acme.sh, 无法执行操作!" && exit 1
     bash ~/.acme.sh/acme.sh --list
     read -rp "请输入要撤销的域名证书 (复制Main_Domain下显示的域名): " domain
-    [[ -z $domain ]] && red "未输入域名，无法执行操作!" && exit 1
-    if [[ -n $(bash ~/.acme.sh/acme.sh --list | grep $domain) ]]; then
-        bash ~/.acme.sh/acme.sh --revoke -d ${domain} --ecc
-        bash ~/.acme.sh/acme.sh --remove -d ${domain} --ecc
-        rm -rf ~/.acme.sh/${domain}_ecc
-        rm -f /root/${domain}/cert.crt /root/${domain}/private.key
+    domain=$(validate_domain "${domain}")
+    
+    if [[ -n $(bash ~/.acme.sh/acme.sh --list 2>/dev/null | grep "${domain}") ]]; then
+        bash ~/.acme.sh/acme.sh --revoke -d "${domain}" --ecc 2>/dev/null
+        bash ~/.acme.sh/acme.sh --remove -d "${domain}" --ecc 2>/dev/null
+        rm -rf ~/.acme.sh/${domain}_ecc 2>/dev/null
+        rm -f /root/${domain}/cert.crt /root/${domain}/private.key 2>/dev/null
         green "撤销${domain}的域名证书成功"
         back2menu
     else
@@ -316,10 +467,11 @@ renew_cert() {
     [[ -z $(~/.acme.sh/acme.sh -v 2>/dev/null) ]] && yellow "未安装acme.sh, 无法执行操作!" && exit 1
     bash ~/.acme.sh/acme.sh --list
     read -rp "请输入要续期的域名证书 (复制Main_Domain下显示的域名): " domain
-    [[ -z $domain ]] && red "未输入域名, 无法执行操作!" && exit 1
-    if [[ -n $(bash ~/.acme.sh/acme.sh --list | grep $domain) ]]; then
-        bash ~/.acme.sh/acme.sh --renew -d ${domain} --force --ecc
-        checktls
+    domain=$(validate_domain "${domain}")
+    
+    if [[ -n $(bash ~/.acme.sh/acme.sh --list 2>/dev/null | grep "${domain}") ]]; then
+        bash ~/.acme.sh/acme.sh --renew -d "${domain}" --force --ecc 2>/dev/null
+        checktls "${domain}"
         back2menu
     else
         red "未找到${domain}的域名证书，请再次检查域名输入正确"
@@ -374,14 +526,15 @@ create_nginx_config() {
         sed -i '/http {/a \    include /etc/nginx/sites-enabled/\*;' /etc/nginx/nginx.conf
     fi
 
+    # 获取并验证用户输入
     read -rp "请输入域名: " domain
-    [[ -z $domain ]] && red "未输入域名，无法执行操作！" && exit 1
+    domain=$(validate_domain "${domain}")
     
     read -rp "请输入反向代理IP: " proxy_ip
-    [[ -z $proxy_ip ]] && red "未输入反向代理IP，无法执行操作！" && exit 1
+    proxy_ip=$(validate_ip "${proxy_ip}")
     
     read -rp "请输入反向代理端口: " proxy_port
-    [[ -z $proxy_port ]] && red "未输入反向代理端口，无法执行操作！" && exit 1
+    proxy_port=$(validate_port "${proxy_port}")
 
     # 检查证书文件是否存在
     if [[ ! -f /root/${domain}/cert.crt || ! -f /root/${domain}/private.key ]]; then
@@ -389,39 +542,103 @@ create_nginx_config() {
         back2menu
     fi
 
-    # 创建nginx配置文件
-    cat > /etc/nginx/sites-available/${domain} << EOF
+    # 创建nginx配置文件 - 参考 nginx10.conf.txt 优化模板
+    cat > /etc/nginx/sites-available/${domain} << 'NGINX_EOF'
+# HTTP 重定向到 HTTPS
 server {
     listen 80;
     listen [::]:80;
-    server_name ${domain};
-    return 301 https://\$server_name\$request_uri;
+    server_name __SERVER_NAME__;
+    
+    # 重定向到 HTTPS
+    return 301 https://__SERVER_NAME__$request_uri;
 }
 
+# HTTPS 服务器配置
 server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
-    server_name ${domain};
+    listen 443 ssl http3;
+    listen [::]:443 ssl http3;
+    server_name __SERVER_NAME__;
 
-    ssl_certificate /root/${domain}/cert.crt;
-    ssl_certificate_key /root/${domain}/private.key;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384';
-    ssl_prefer_server_ciphers off;
-    ssl_session_timeout 1d;
-    ssl_session_cache shared:SSL:10m;
-    ssl_session_tickets off;
+    # SSL 证书配置
+    ssl_certificate /__CERT_PATH__/cert.crt;
+    ssl_certificate_key /__CERT_PATH__/private.key;
     
+    # SSL 协议和加密套件
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+    ssl_ciphers 'ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256';
+    
+    # SSL 会话优化
+    ssl_session_cache shared:SSL:30m;
+    ssl_session_timeout 1h;
+    ssl_session_tickets off;
+    ssl_buffer_size 32k;
+    
+    # HTTP/2 和 HTTP/3 配置
+    http2 on;
+    http3 on;
+    quic_retry on;
+    http2_max_concurrent_streams 512;
+    http3_max_concurrent_streams 512;
+    
+    # 安全头部
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Permissions-Policy "geolocation=(), microphone=()" always;
+    add_header Vary "Accept-Encoding" always;
+
+    # Gzip 压缩
+    gzip on;
+    gzip_static on;
+    gzip_comp_level 3;
+    gzip_buffers 8 256k;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css text/javascript application/javascript application/json application/xml text/xml application/rss+xml application/atom+xml image/svg+xml font/woff font/woff2 application/wasm;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_disable "msie6";
+
+    # 反向代理配置
     location / {
-        proxy_pass http://${proxy_ip}:${proxy_port};
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_pass http://__PROXY_IP__:__PROXY_PORT__;
         
-        proxy_set_header X-Forwarded-Proto \$scheme;
+        # 代理头部设置
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+        
+        # 代理超时设置
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+        
+        # 代理缓冲区设置
+        proxy_buffering on;
+        proxy_buffer_size 16k;
+        proxy_buffers 8 16k;
+        proxy_busy_buffers_size 32k;
+        
+        # 代理头部超时
+        proxy_headers_timeout 60s;
+        
+        # 保持连接
+        proxy_socket_keepalive on;
     }
 }
-EOF
+NGINX_EOF
+
+    # 替换占位符为实际值
+    sed -i "s|__SERVER_NAME__|${domain}|g" /etc/nginx/sites-available/${domain}
+    sed -i "s|__PROXY_IP__|${proxy_ip}|g" /etc/nginx/sites-available/${domain}
+    sed -i "s|__PROXY_PORT__|${proxy_port}|g" /etc/nginx/sites-available/${domain}
+    sed -i "s|__CERT_PATH__|/root/${domain}|g" /etc/nginx/sites-available/${domain}
 
     # 检查配置文件是否创建成功
     if [[ ! -f /etc/nginx/sites-available/${domain} ]]; then
@@ -455,9 +672,13 @@ manage_nginx_config() {
             back2menu
         fi
 
-        # 获取配置文件列表
-        configs=($(ls /etc/nginx/sites-available/))
-        if [[ ${#configs[@]} -eq 0 ]]; then
+        # 获取配置文件列表（添加错误处理）
+        configs=()
+        if [[ -d /etc/nginx/sites-available ]]; then
+            mapfile -t configs < <(ls /etc/nginx/sites-available/ 2>/dev/null)
+        fi
+        
+        if [[ ${#configs[@]} -eq 0 ]] || [[ -z "${configs[0]}" ]]; then
             yellow "没有找到任何nginx配置文件！"
             back2menu
         fi
@@ -476,12 +697,19 @@ manage_nginx_config() {
             break
         fi
         
-        if [[ ! $config_num =~ ^[0-9]+$ ]] || [ $config_num -lt 1 ] || [ $config_num -gt ${#configs[@]} ]; then
+        if [[ ! $config_num =~ ^[0-9]+$ ]] || [[ $config_num -lt 1 ]] || [[ $config_num -gt ${#configs[@]} ]]; then
             red "输入错误！"
             continue
         fi
 
         selected_config=${configs[$((config_num-1))]}
+        
+        # 验证配置文件是否存在
+        if [[ ! -f "/etc/nginx/sites-available/${selected_config}" ]]; then
+            red "配置文件不存在或已被删除！"
+            read -rp "按回车键继续..."
+            continue
+        fi
         while true; do
             clear
             echo -e "已选择: ${GREEN}${selected_config}${PLAIN}"
@@ -489,10 +717,11 @@ manage_nginx_config() {
             echo -e "请选择操作："
             echo -e " ${GREEN}1.${PLAIN} 修改配置"
             echo -e " ${GREEN}2.${PLAIN} 删除配置"
-            echo -e " ${GREEN}3.${PLAIN} 返回配置文件列表"
+            echo -e " ${GREEN}3.${PLAIN} 查看配置详情"
+            echo -e " ${GREEN}4.${PLAIN} 返回配置文件列表"
             echo -e " ${GREEN}0.${PLAIN} 返回主菜单"
             
-            read -rp "请选择 [0-3]: " operation
+            read -rp "请选择 [0-4]: " operation
             case "$operation" in
                 0)
                     menu
@@ -537,6 +766,15 @@ manage_nginx_config() {
                     fi
                     ;;
                 3)
+                    # 查看配置详情
+                    clear
+                    echo -e "配置文件详情: ${GREEN}${selected_config}${PLAIN}"
+                    echo "------------------------------------------------"
+                    cat "/etc/nginx/sites-available/${selected_config}"
+                    echo "------------------------------------------------"
+                    read -rp "按回车键继续..."
+                    ;;
+                4)
                     break  # 返回配置文件列表
                     ;;
                 *)
