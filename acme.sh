@@ -542,8 +542,21 @@ create_nginx_config() {
         back2menu
     fi
 
-    # 创建nginx配置文件 - 参考 nginx10.conf.txt 优化模板
-    cat > /etc/nginx/sites-available/${domain} << 'NGINX_EOF'
+    # 检测 Nginx 是否支持 HTTP/3
+    nginx_version=$(nginx -v 2>&1 | grep -oP '\d+\.\d+(\.\d+)?')
+    http3_enabled=false
+    
+    if nginx -V 2>&1 | grep -q "with-http_v3_module"; then
+        http3_enabled=true
+        green "检测到 Nginx 支持 HTTP/3"
+    else
+        yellow "当前 Nginx 版本不支持 HTTP/3，将使用 HTTP/2"
+    fi
+
+    # 根据检测结果生成不同的配置
+    if [[ "$http3_enabled" == "true" ]]; then
+        # HTTP/3 配置
+        cat > /etc/nginx/sites-available/${domain} << 'NGINX_EOF'
 # HTTP 重定向到 HTTPS
 server {
     listen 80;
@@ -554,7 +567,7 @@ server {
     return 301 https://__SERVER_NAME__$request_uri;
 }
 
-# HTTPS 服务器配置
+# HTTPS 服务器配置 (HTTP/3)
 server {
     listen 443 ssl http3;
     listen [::]:443 ssl http3;
@@ -633,6 +646,96 @@ server {
     }
 }
 NGINX_EOF
+    else
+        # HTTP/2 配置（兼容不支持 HTTP/3 的 Nginx）
+        cat > /etc/nginx/sites-available/${domain} << 'NGINX_EOF'
+# HTTP 重定向到 HTTPS
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __SERVER_NAME__;
+    
+    # 重定向到 HTTPS
+    return 301 https://__SERVER_NAME__$request_uri;
+}
+
+# HTTPS 服务器配置 (HTTP/2)
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name __SERVER_NAME__;
+
+    # SSL 证书配置
+    ssl_certificate /__CERT_PATH__/cert.crt;
+    ssl_certificate_key /__CERT_PATH__/private.key;
+    
+    # SSL 协议和加密套件
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+    ssl_ciphers 'ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256';
+    
+    # SSL 会话优化
+    ssl_session_cache shared:SSL:30m;
+    ssl_session_timeout 1h;
+    ssl_session_tickets off;
+    ssl_buffer_size 32k;
+    
+    # HTTP/2 配置
+    http2 on;
+    http2_max_concurrent_streams 512;
+    
+    # 安全头部
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Permissions-Policy "geolocation=(), microphone=()" always;
+    add_header Vary "Accept-Encoding" always;
+
+    # Gzip 压缩
+    gzip on;
+    gzip_static on;
+    gzip_comp_level 3;
+    gzip_buffers 8 256k;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css text/javascript application/javascript application/json application/xml text/xml application/rss+xml application/atom+xml image/svg+xml font/woff font/woff2 application/wasm;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_disable "msie6";
+
+    # 反向代理配置
+    location / {
+        proxy_pass http://__PROXY_IP__:__PROXY_PORT__;
+        
+        # 代理头部设置
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+        
+        # 代理超时设置
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+        
+        # 代理缓冲区设置
+        proxy_buffering on;
+        proxy_buffer_size 16k;
+        proxy_buffers 8 16k;
+        proxy_busy_buffers_size 32k;
+        
+        # 代理头部超时
+        proxy_headers_timeout 60s;
+        
+        # 保持连接
+        proxy_socket_keepalive on;
+    }
+}
+NGINX_EOF
+    fi
 
     # 替换占位符为实际值
     sed -i "s|__SERVER_NAME__|${domain}|g" /etc/nginx/sites-available/${domain}
